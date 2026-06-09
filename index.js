@@ -3,7 +3,7 @@ import { extension_settings, renderExtensionTemplateAsync } from '../../../exten
 import { debounce } from '../../../utils.js';
 import { registerSlashCommand } from '../../../slash-commands.js';
 
-const EXTENSION_NAME = 'third-party/st-ios-background-keeper';
+const EXTENSION_NAME = getExtensionNameFromImportUrl();
 const SETTINGS_KEY = 'iosBackgroundKeeper';
 
 const DEFAULT_SETTINGS = Object.freeze({
@@ -33,6 +33,27 @@ const state = {
     lastWarning: '',
     frame: 0,
 };
+
+function getExtensionNameFromImportUrl() {
+    const fallback = 'third-party/st-ios-background-keeper';
+
+    try {
+        const marker = '/scripts/extensions/';
+        const path = new URL(import.meta.url).pathname.replace(/\\/g, '/');
+        const markerIndex = path.indexOf(marker);
+        if (markerIndex === -1) return fallback;
+
+        const relativePath = decodeURIComponent(path.slice(markerIndex + marker.length));
+        const parts = relativePath.split('/').filter(Boolean);
+        if (parts[0] === 'third-party' && parts[1]) {
+            return `third-party/${parts[1]}`;
+        }
+
+        return parts[0] || fallback;
+    } catch {
+        return fallback;
+    }
+}
 
 function getSettings() {
     if (!extension_settings[SETTINGS_KEY] || typeof extension_settings[SETTINGS_KEY] !== 'object') {
@@ -901,6 +922,33 @@ function addWandMenuButton() {
     }
 }
 
+function renderInitializationError(error) {
+    console.error('[iOS Background Keeper] Initialization failed:', error);
+
+    const container = getOrCreateSettingsContainer();
+    const root = document.createElement('div');
+    root.id = 'ios_keeper_root';
+    root.className = 'ios-keeper-root';
+
+    const drawer = document.createElement('div');
+    drawer.className = 'inline-drawer';
+    drawer.innerHTML = `
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>iOS Background Keeper</b>
+            <span class="ios-keeper-badge" data-state="error">Error</span>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="ios-keeper-message"></div>
+        </div>
+    `;
+
+    drawer.querySelector('.ios-keeper-message').textContent = normalizeError(error) || 'Initialization failed.';
+    root.append(drawer);
+    container.append(root);
+    addWandMenuButton();
+}
+
 function slashCommand(_args, value = '') {
     const command = String(value || '').trim().toLowerCase();
 
@@ -924,25 +972,34 @@ function slashCommand(_args, value = '') {
 }
 
 async function init() {
-    const html = await renderExtensionTemplateAsync(EXTENSION_NAME, 'panel');
     const container = $(getOrCreateSettingsContainer());
 
-    container.append(html);
-    getSettings();
-    syncUI();
-    bindSettingsControls();
-    bindPageLifecycle();
-    addWandMenuButton();
-    updateDiagnostics();
+    try {
+        const html = await renderExtensionTemplateAsync(EXTENSION_NAME, 'panel');
+        container.append(html);
+        getSettings();
+        syncUI();
+        bindSettingsControls();
+        bindPageLifecycle();
+        addWandMenuButton();
+        updateDiagnostics();
+    } catch (error) {
+        renderInitializationError(error);
+        return;
+    }
 
-    registerSlashCommand(
-        'ios-keeper',
-        slashCommand,
-        [],
-        '- starts/stops iOS Background Keeper. Use "stop", "inline", or "status".',
-        true,
-        true,
-    );
+    try {
+        registerSlashCommand(
+            'ios-keeper',
+            slashCommand,
+            [],
+            '- starts/stops iOS Background Keeper. Use "stop", "inline", or "status".',
+            true,
+            true,
+        );
+    } catch (error) {
+        console.warn('[iOS Background Keeper] Slash command registration failed:', error);
+    }
 }
 
 jQuery(() => {

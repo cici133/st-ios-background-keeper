@@ -1,0 +1,117 @@
+.ios-keeper-root {
+    --ios-keeper-ok: #4caf50;
+    --ios-keeper-warn: #d6a23a;
+    --ios-keeper-bad: #d05f5f;
+    --ios-keeper-panel: rgba(127, 127, 127, 0.12);
+}
+
+.ios-keeper-badge {
+    margin-left: auto;
+    margin-right: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: var(--ios-keeper-panel);
+    color: var(--SmartThemeBodyColor);
+    font-size: 0.85em;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.ios-keeper-badge[data-state="running"],
+.ios-keeper-badge[data-state="pip"] {
+    color: var(--ios-keeper-ok);
+}
+
+.ios-keeper-badge[data-state="warning"] {
+    color: var(--ios-keeper-warn);
+}
+
+.ios-keeper-badge[data-state="error"] {
+    color: var(--ios-keeper-bad);
+}
+
+.ios-keeper-toolbar,
+.ios-keeper-options,
+.ios-keeper-tuning {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+}
+
+.ios-keeper-toolbar .menu_button,
+.ios-keeper-tuning .menu_button {
+    min-height: 32px;
+    gap: 6px;
+}
+
+.ios-keeper-switch,
+.ios-keeper-options label,
+.ios-keeper-tuning label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    margin: 0;
+}
+
+.ios-keeper-tuning input[type="number"] {
+    width: 58px;
+}
+
+.ios-keeper-message {
+    min-height: 1.3em;
+    color: var(--SmartThemeEmColor);
+    font-size: 0.92em;
+    overflow-wrap: anywhere;
+}
+
+.ios-keeper-stage {
+    display: none;
+    margin-top: 8px;
+}
+
+.ios-keeper-root[data-preview="true"] .ios-keeper-stage {
+    display: block;
+}
+
+.ios-keeper-video-mount {
+    width: min(180px, 100%);
+    aspect-ratio: 16 / 9;
+    background: #101316;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.ios-keeper-video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #101316;
+    object-fit: cover;
+}
+
+.ios-keeper-diagnostics {
+    display: none;
+    grid-template-columns: minmax(120px, 0.85fr) minmax(120px, 1.15fr);
+    gap: 4px 10px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+    font-size: 0.9em;
+}
+
+.ios-keeper-root[data-diagnostics="true"] .ios-keeper-diagnostics {
+    display: grid;
+}
+
+.ios-keeper-diagnostics .ios-keeper-key {
+    color: var(--SmartThemeQuoteColor);
+}
+
+.ios-keeper-diagnostics .ios-keeper-value {
+    color: var(--SmartThemeBodyColor);
+    overflow-wrap: anywhere;
+}

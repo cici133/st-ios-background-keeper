@@ -1,0 +1,12 @@
+{
+    "display_name": "iOS Background Keeper",
+    "loading_order": 7,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Codex",
+    "version": "1.0.0",
+    "homePage": "https://github.com/SillyTavern/SillyTavern",
+    "auto_update": false
+}

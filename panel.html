@@ -1,0 +1,69 @@
+<div id="ios_keeper_root" class="ios-keeper-root">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>iOS Background Keeper</b>
+            <span id="ios_keeper_badge" class="ios-keeper-badge">Stopped</span>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="ios-keeper-toolbar">
+                <label class="ios-keeper-switch" title="Keep the extension armed.">
+                    <input id="ios_keeper_enabled" type="checkbox" />
+                    <span>Enabled</span>
+                </label>
+                <button id="ios_keeper_start" class="menu_button" type="button" title="Start the keeper video and enter Picture in Picture.">
+                    <i class="fa-solid fa-play"></i>
+                    <span>Start PiP</span>
+                </button>
+                <button id="ios_keeper_pip" class="menu_button" type="button" title="Enter Picture in Picture again.">
+                    <i class="fa-solid fa-up-right-from-square"></i>
+                    <span>PiP</span>
+                </button>
+                <button id="ios_keeper_stop" class="menu_button" type="button" title="Stop the keeper video.">
+                    <i class="fa-solid fa-stop"></i>
+                    <span>Stop</span>
+                </button>
+            </div>
+
+            <div id="ios_keeper_message" class="ios-keeper-message"></div>
+
+            <div class="ios-keeper-options">
+                <label title="Enter Picture in Picture when Start PiP is pressed.">
+                    <input id="ios_keeper_enter_pip_on_start" type="checkbox" />
+                    <span>PiP on start</span>
+                </label>
+                <label title="Try to restart the keeper media if Safari pauses it.">
+                    <input id="ios_keeper_auto_resume" type="checkbox" />
+                    <span>Auto resume</span>
+                </label>
+                <label title="Keep the screen awake while SillyTavern is foregrounded, if supported.">
+                    <input id="ios_keeper_wake_lock" type="checkbox" />
+                    <span>Wake lock</span>
+                </label>
+                <label title="Show the small keeper video in the extension panel.">
+                    <input id="ios_keeper_show_preview" type="checkbox" />
+                    <span>Preview</span>
+                </label>
+                <label title="Show compatibility and runtime diagnostics.">
+                    <input id="ios_keeper_show_diagnostics" type="checkbox" />
+                    <span>Diagnostics</span>
+                </label>
+            </div>
+
+            <div class="ios-keeper-tuning">
+                <label for="ios_keeper_frame_rate">FPS</label>
+                <input id="ios_keeper_frame_rate" class="text_pole widthUnset" type="number" min="1" max="5" step="1" />
+                <button id="ios_keeper_refresh" class="menu_button" type="button" title="Refresh status.">
+                    <i class="fa-solid fa-rotate"></i>
+                    <span>Status</span>
+                </button>
+            </div>
+
+            <div id="ios_keeper_stage" class="ios-keeper-stage">
+                <div id="ios_keeper_video_mount" class="ios-keeper-video-mount"></div>
+            </div>
+
+            <div id="ios_keeper_diagnostics" class="ios-keeper-diagnostics"></div>
+        </div>
+    </div>
+</div>

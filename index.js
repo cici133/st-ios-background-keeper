@@ -834,6 +834,73 @@ function buildStatusSummary() {
     ].join(' ');
 }
 
+function getOrCreateSettingsContainer() {
+    const existing = document.getElementById('ios_keeper_container');
+    if (existing) return existing;
+
+    const container = document.createElement('div');
+    container.id = 'ios_keeper_container';
+    container.className = 'extension_container';
+
+    const idleContainer = document.getElementById('idle_container');
+    if (idleContainer?.parentElement) {
+        idleContainer.insertAdjacentElement('afterend', container);
+        return container;
+    }
+
+    const silenceContainer = document.getElementById('silence_container');
+    if (silenceContainer?.parentElement) {
+        silenceContainer.insertAdjacentElement('afterend', container);
+        return container;
+    }
+
+    const settingsColumn = document.getElementById('extensions_settings2') ?? document.getElementById('extensions_settings');
+    settingsColumn?.append(container);
+    return container;
+}
+
+function revealSettingsPanel() {
+    const drawerContent = document.getElementById('rm_extensions_block');
+    if (drawerContent?.classList.contains('closedDrawer')) {
+        document.querySelector('#extensions-settings-button .drawer-toggle')?.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+        }));
+    }
+
+    setTimeout(() => {
+        getRoot()?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+}
+
+function addWandMenuButton() {
+    if (document.getElementById('ios_keeper_wand_button')) return;
+
+    const menu = document.getElementById('extensionsMenu');
+    if (!menu) return;
+
+    const button = document.createElement('div');
+    button.id = 'ios_keeper_wand_button';
+    button.className = 'list-group-item flex-container flexGap5';
+    button.title = 'Open iOS Background Keeper';
+    button.innerHTML = `
+        <div class="fa-solid fa-window-restore extensionsMenuExtensionButton"></div>
+        <span>iOS Background Keeper</span>
+    `;
+    button.addEventListener('click', () => {
+        $('#extensionsMenu').hide();
+        revealSettingsPanel();
+    });
+
+    const anchor = document.getElementById('tts_wand_container') ?? menu.lastElementChild;
+    if (anchor?.parentElement === menu) {
+        anchor.insertAdjacentElement('afterend', button);
+    } else {
+        menu.append(button);
+    }
+}
+
 function slashCommand(_args, value = '') {
     const command = String(value || '').trim().toLowerCase();
 
@@ -858,17 +925,14 @@ function slashCommand(_args, value = '') {
 
 async function init() {
     const html = await renderExtensionTemplateAsync(EXTENSION_NAME, 'panel');
-    const container = $(
-        document.getElementById('ios_keeper_container')
-        ?? document.getElementById('extensions_settings2')
-        ?? document.getElementById('extensions_settings'),
-    );
+    const container = $(getOrCreateSettingsContainer());
 
     container.append(html);
     getSettings();
     syncUI();
     bindSettingsControls();
     bindPageLifecycle();
+    addWandMenuButton();
     updateDiagnostics();
 
     registerSlashCommand(

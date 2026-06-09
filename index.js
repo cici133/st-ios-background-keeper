@@ -36,6 +36,8 @@ const state = {
     recordedUrl: '',
     recordedFrameRate: null,
     recordedMimeType: '',
+    userPaused: false,
+    suppressPauseTracking: false,
 };
 
 function getExtensionNameFromImportUrl() {
@@ -246,6 +248,7 @@ function updateDiagnostics() {
         ['PiP active', formatBool(isInPictureInPicture())],
         ['Stream tracks', stream ? String(stream.getVideoTracks().length) : '0'],
         ['Video size', video?.videoWidth ? `${video.videoWidth}x${video.videoHeight}` : 'none'],
+        ['User paused', formatBool(state.userPaused)],
         ['Runtime', state.startedAt ? formatDuration(Date.now() - state.startedAt) : '0s'],
         ['Max timer drift', `${Math.round(state.maxHeartbeatDriftMs)}ms`],
         ['Wake lock API', formatBool(report.wakeLock)],
@@ -354,10 +357,37 @@ function bindVideoEvents(video) {
         });
     }
 
+    video.addEventListener('pause', () => {
+        if (state.suppressPauseTracking || !getSettings().enabled) return;
+
+        state.userPaused = true;
+        state.lastWarning = '';
+        setMessage('Paused. Auto resume is suspended until you press Start Video again.', 'info');
+        refreshRuntimeStatus();
+        updateDiagnostics();
+    });
+
+    video.addEventListener('play', () => {
+        if (!state.suppressPauseTracking) {
+            state.userPaused = false;
+        }
+        updateDiagnostics();
+    });
+
     video.addEventListener('error', () => {
         const detail = video.error ? `media error ${video.error.code}` : 'media error';
         setLastError(detail);
     });
+}
+
+function pauseVideoInternally(video = state.video) {
+    if (!video || video.paused) return;
+
+    state.suppressPauseTracking = true;
+    video.pause();
+    setTimeout(() => {
+        state.suppressPauseTracking = false;
+    }, 300);
 }
 
 function ensureCanvas() {
@@ -491,7 +521,7 @@ async function ensureRecordedVideo() {
     state.recordedFrameRate = frameRate;
     state.recordedMimeType = blob.type || mimeType;
 
-    video.pause();
+    pauseVideoInternally(video);
     video.srcObject = null;
     video.src = url;
     video.loop = true;
@@ -724,6 +754,7 @@ async function enterNativeFullscreen() {
 async function startKeeper({ enterPip = true } = {}) {
     const settings = getSettings();
     settings.enabled = true;
+    state.userPaused = false;
     saveSettings();
     syncUI();
 
@@ -766,7 +797,7 @@ async function stopKeeper({ disarm = true } = {}) {
     await exitPictureInPicture();
 
     if (state.video) {
-        state.video.pause();
+        pauseVideoInternally(state.video);
     }
 
     stopStream();
@@ -780,6 +811,7 @@ async function stopKeeper({ disarm = true } = {}) {
     state.maxHeartbeatDriftMs = 0;
     state.lastError = '';
     state.lastWarning = '';
+    state.userPaused = false;
     setMediaSessionState('none');
     syncUI();
     setBadge('Stopped', 'stopped');
@@ -805,7 +837,7 @@ async function recoveryTick() {
     const settings = getSettings();
     if (!settings.enabled || !state.video) return;
 
-    if (settings.autoResume && state.video.paused) {
+    if (settings.autoResume && state.video.paused && !state.userPaused) {
         try {
             await playVideo();
         } catch (error) {
@@ -928,6 +960,12 @@ function refreshRuntimeStatus() {
             setMessage(message, 'info');
         }
         setMediaSessionState('playing');
+    } else if (video && video.paused && settings.enabled && state.userPaused) {
+        setBadge('Paused', 'warning');
+        if (!state.lastWarning && !state.lastError) {
+            setMessage('Paused. Auto resume is suspended until you press Start Video again.', 'info');
+        }
+        setMediaSessionState('paused');
     } else if (settings.enabled) {
         setBadge('Armed', 'warning');
         if (!state.lastWarning && !state.lastError) {

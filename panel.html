@@ -19,6 +19,10 @@
                     <i class="fa-solid fa-up-right-from-square"></i>
                     <span>PiP</span>
                 </button>
+                <button id="ios_keeper_fullscreen" class="menu_button" type="button" title="Open the system video fullscreen controls. On iOS, try the PiP button there.">
+                    <i class="fa-solid fa-expand"></i>
+                    <span>Fullscreen</span>
+                </button>
                 <button id="ios_keeper_stop" class="menu_button" type="button" title="Stop the keeper video.">
                     <i class="fa-solid fa-stop"></i>
                     <span>Stop</span>
@@ -51,6 +55,12 @@
             </div>
 
             <div class="ios-keeper-tuning">
+                <label for="ios_keeper_source_mode">Source</label>
+                <select id="ios_keeper_source_mode" class="text_pole">
+                    <option value="auto">Auto</option>
+                    <option value="recorded">Recorded</option>
+                    <option value="stream">Live stream</option>
+                </select>
                 <label for="ios_keeper_frame_rate">FPS</label>
                 <input id="ios_keeper_frame_rate" class="text_pole widthUnset" type="number" min="1" max="5" step="1" />
                 <button id="ios_keeper_refresh" class="menu_button" type="button" title="Refresh status.">

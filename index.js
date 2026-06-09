@@ -1,6 +1,6 @@
 import { saveSettingsDebounced } from '../../../../script.js';
 import { extension_settings, renderExtensionTemplateAsync } from '../../../extensions.js';
-import { debounce } from '../../../utils.js';
+import { debounce, delay } from '../../../utils.js';
 import { registerSlashCommand } from '../../../slash-commands.js';
 
 const EXTENSION_NAME = getExtensionNameFromImportUrl();
@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     wakeLock: false,
     showPreview: false,
     showDiagnostics: true,
+    sourceMode: 'auto',
     frameRate: 1,
 });
 
@@ -32,6 +33,9 @@ const state = {
     lastError: '',
     lastWarning: '',
     frame: 0,
+    recordedUrl: '',
+    recordedFrameRate: null,
+    recordedMimeType: '',
 };
 
 function getExtensionNameFromImportUrl() {
@@ -73,9 +77,14 @@ function getSettings() {
     settings.wakeLock = Boolean(settings.wakeLock);
     settings.showPreview = Boolean(settings.showPreview);
     settings.showDiagnostics = Boolean(settings.showDiagnostics);
+    settings.sourceMode = normalizeSourceMode(settings.sourceMode);
     settings.frameRate = clampFrameRate(settings.frameRate);
 
     return settings;
+}
+
+function normalizeSourceMode(value) {
+    return ['auto', 'recorded', 'stream'].includes(value) ? value : DEFAULT_SETTINGS.sourceMode;
 }
 
 function clampFrameRate(value) {
@@ -160,6 +169,8 @@ function getSupportReport() {
         webkitPipApi: typeof HTMLVideoElement !== 'undefined'
             && typeof HTMLVideoElement.prototype.webkitSetPresentationMode === 'function',
         webkitElementPip,
+        mediaRecorder: 'MediaRecorder' in window,
+        recordedMimeType: getBestRecorderMimeType() || ('MediaRecorder' in window ? 'default' : ''),
         mediaSession: 'mediaSession' in navigator,
         wakeLock: Boolean(navigator.wakeLock?.request),
     };
@@ -178,6 +189,42 @@ function formatDuration(ms) {
     return `${minutes}m ${seconds}s`;
 }
 
+function getBestRecorderMimeType() {
+    if (!('MediaRecorder' in window) || typeof MediaRecorder.isTypeSupported !== 'function') {
+        return '';
+    }
+
+    const candidates = [
+        'video/mp4;codecs=avc1.42E01E',
+        'video/mp4;codecs=h264',
+        'video/mp4',
+        'video/webm;codecs=vp9',
+        'video/webm;codecs=vp8',
+        'video/webm',
+    ];
+
+    return candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
+}
+
+function getVideoSourceLabel() {
+    if (state.recordedUrl && state.video?.src === state.recordedUrl) {
+        return `recorded blob${state.recordedMimeType ? ` (${state.recordedMimeType})` : ''}`;
+    }
+
+    if (state.stream && state.video?.srcObject === state.stream) {
+        return 'canvas stream';
+    }
+
+    return 'none';
+}
+
+function shouldUseRecordedSource() {
+    const settings = getSettings();
+    if (settings.sourceMode === 'stream') return false;
+    if (settings.sourceMode === 'recorded') return true;
+    return detectIOS() || detectStandalone();
+}
+
 function updateDiagnostics() {
     const container = document.getElementById('ios_keeper_diagnostics');
     if (!container) return;
@@ -189,12 +236,16 @@ function updateDiagnostics() {
         ['iOS detected', formatBool(report.iOS)],
         ['Home Screen mode', formatBool(report.homeScreen)],
         ['Canvas stream', formatBool(report.canvasStream)],
+        ['Video source', getVideoSourceLabel()],
+        ['MediaRecorder', formatBool(report.mediaRecorder)],
+        ['Recorded MIME', report.recordedMimeType || 'none'],
         ['WebKit PiP API', formatBool(report.webkitPipApi)],
         ['Element PiP ready', formatBool(report.webkitElementPip)],
         ['Standard PiP API', formatBool(report.standardPip)],
         ['Video paused', video ? formatBool(video.paused) : 'none'],
         ['PiP active', formatBool(isInPictureInPicture())],
-        ['Video tracks', stream ? String(stream.getVideoTracks().length) : '0'],
+        ['Stream tracks', stream ? String(stream.getVideoTracks().length) : '0'],
+        ['Video size', video?.videoWidth ? `${video.videoWidth}x${video.videoHeight}` : 'none'],
         ['Runtime', state.startedAt ? formatDuration(Date.now() - state.startedAt) : '0s'],
         ['Max timer drift', `${Math.round(state.maxHeartbeatDriftMs)}ms`],
         ['Wake lock API', formatBool(report.wakeLock)],
@@ -226,6 +277,7 @@ function syncUI() {
     $('#ios_keeper_wake_lock').prop('checked', settings.wakeLock);
     $('#ios_keeper_show_preview').prop('checked', settings.showPreview);
     $('#ios_keeper_show_diagnostics').prop('checked', settings.showDiagnostics);
+    $('#ios_keeper_source_mode').val(settings.sourceMode);
     $('#ios_keeper_frame_rate').val(settings.frameRate);
 
     const root = getRoot();
@@ -378,6 +430,8 @@ async function ensureCanvasStream() {
     }
 
     stopStream();
+    revokeRecordedUrl();
+    video.removeAttribute('src');
     startDrawing(frameRate);
 
     const stream = canvas.captureStream(frameRate);
@@ -392,6 +446,111 @@ async function ensureCanvasStream() {
     return stream;
 }
 
+async function ensureKeeperVideoSource() {
+    if (shouldUseRecordedSource()) {
+        try {
+            return await ensureRecordedVideo();
+        } catch (error) {
+            if (getSettings().sourceMode === 'recorded') {
+                throw error;
+            }
+
+            state.lastWarning = `Recorded video failed, falling back to live stream: ${normalizeError(error)}`;
+        }
+    }
+
+    return ensureCanvasStream();
+}
+
+async function ensureRecordedVideo() {
+    const settings = getSettings();
+    const frameRate = clampFrameRate(settings.frameRate);
+    const video = ensureVideoElement();
+
+    if (state.recordedUrl && state.recordedFrameRate === frameRate && video.src === state.recordedUrl) {
+        await waitForMetadata(video, 1400);
+        return state.recordedUrl;
+    }
+
+    if (typeof HTMLCanvasElement === 'undefined' || typeof HTMLCanvasElement.prototype.captureStream !== 'function') {
+        throw new Error('Canvas captureStream is required to prepare a recorded video.');
+    }
+
+    if (!('MediaRecorder' in window)) {
+        throw new Error('MediaRecorder is not available in this browser.');
+    }
+
+    const mimeType = getBestRecorderMimeType();
+    stopStream();
+    revokeRecordedUrl();
+
+    const blob = await recordKeeperBlob(frameRate, mimeType);
+    const url = URL.createObjectURL(blob);
+
+    state.recordedUrl = url;
+    state.recordedFrameRate = frameRate;
+    state.recordedMimeType = blob.type || mimeType;
+
+    video.pause();
+    video.srcObject = null;
+    video.src = url;
+    video.loop = true;
+    video.muted = true;
+    video.defaultMuted = true;
+    video.load();
+
+    await waitForMetadata(video, 1800);
+    return url;
+}
+
+async function recordKeeperBlob(frameRate, mimeType) {
+    const canvas = ensureCanvas();
+    startDrawing(Math.max(2, frameRate));
+
+    const stream = canvas.captureStream(Math.max(2, frameRate));
+    const chunks = [];
+
+    try {
+        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+
+        const stopped = new Promise((resolve, reject) => {
+            recorder.ondataavailable = event => {
+                if (event.data && event.data.size > 0) {
+                    chunks.push(event.data);
+                }
+            };
+
+            recorder.onerror = event => {
+                reject(event.error || new Error('MediaRecorder failed.'));
+            };
+
+            recorder.onstop = () => {
+                if (chunks.length === 0) {
+                    reject(new Error('MediaRecorder produced an empty video.'));
+                    return;
+                }
+
+                const blobType = mimeType || chunks[0]?.type || 'video/mp4';
+                resolve(new Blob(chunks, { type: blobType }));
+            };
+        });
+
+        recorder.start(100);
+        await delay(1400);
+
+        if (recorder.state !== 'inactive') {
+            recorder.stop();
+        }
+
+        return await stopped;
+    } finally {
+        for (const track of stream.getTracks()) {
+            track.stop();
+        }
+        stopDrawing();
+    }
+}
+
 function stopStream() {
     if (state.stream) {
         for (const track of state.stream.getTracks()) {
@@ -404,6 +563,20 @@ function stopStream() {
     if (state.video) {
         state.video.srcObject = null;
     }
+}
+
+function revokeRecordedUrl() {
+    if (!state.recordedUrl) return;
+
+    try {
+        URL.revokeObjectURL(state.recordedUrl);
+    } catch {
+        // Ignore cleanup errors for stale blob URLs.
+    }
+
+    state.recordedUrl = '';
+    state.recordedFrameRate = null;
+    state.recordedMimeType = '';
 }
 
 function waitForMetadata(video, timeoutMs) {
@@ -522,6 +695,32 @@ async function exitPictureInPicture() {
     }
 }
 
+async function enterNativeFullscreen() {
+    const video = ensureVideoElement();
+
+    if (!state.stream && !state.recordedUrl) {
+        throw new Error('Keeper video is not ready. Tap Start Video first.');
+    }
+
+    if (video.paused) {
+        throw new Error('Keeper video is not playing. Tap Start Video first.');
+    }
+
+    if (typeof video.webkitEnterFullscreen === 'function') {
+        video.webkitEnterFullscreen();
+        setMessage('Opened native video controls. If iOS shows a PiP icon, tap it there.', 'info');
+        return;
+    }
+
+    if (typeof video.requestFullscreen === 'function') {
+        await video.requestFullscreen();
+        setMessage('Opened fullscreen video controls. If iOS shows a PiP icon, tap it there.', 'info');
+        return;
+    }
+
+    throw new Error('Native fullscreen is not available for this video element.');
+}
+
 async function startKeeper({ enterPip = true } = {}) {
     const settings = getSettings();
     settings.enabled = true;
@@ -532,7 +731,7 @@ async function startKeeper({ enterPip = true } = {}) {
     setMessage('Starting keeper video...', 'info');
 
     try {
-        await ensureCanvasStream();
+        await ensureKeeperVideoSource();
         await playVideo();
         state.startedAt = state.startedAt || Date.now();
         state.lastError = '';
@@ -571,6 +770,11 @@ async function stopKeeper({ disarm = true } = {}) {
     }
 
     stopStream();
+    revokeRecordedUrl();
+    if (state.video) {
+        state.video.removeAttribute('src');
+        state.video.load();
+    }
     stopDrawing();
     state.startedAt = 0;
     state.maxHeartbeatDriftMs = 0;
@@ -783,6 +987,14 @@ function bindSettingsControls() {
         }
     });
 
+    $('#ios_keeper_fullscreen').on('click', async () => {
+        try {
+            await enterNativeFullscreen();
+        } catch (error) {
+            setLastError(error);
+        }
+    });
+
     $('#ios_keeper_stop').on('click', () => {
         void stopKeeper({ disarm: true });
     });
@@ -816,13 +1028,25 @@ function bindSettingsControls() {
         updateBooleanSetting('showDiagnostics', this.checked);
     });
 
+    $('#ios_keeper_source_mode').on('change', function () {
+        const settings = getSettings();
+        settings.sourceMode = normalizeSourceMode(this.value);
+        saveSettings();
+
+        if (settings.enabled) {
+            void startKeeper({ enterPip: false });
+        } else {
+            syncUI();
+        }
+    });
+
     $('#ios_keeper_frame_rate').on('input', debounce(function () {
         const settings = getSettings();
         settings.frameRate = clampFrameRate(this.value);
         this.value = settings.frameRate;
         saveSettings();
 
-        if (settings.enabled && state.stream) {
+        if (settings.enabled && (state.stream || state.recordedUrl)) {
             void startKeeper({ enterPip: false });
         } else {
             syncUI();

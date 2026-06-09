@@ -451,10 +451,18 @@ async function enterPictureInPicture() {
     saveSettings();
     syncUI();
 
-    await ensureCanvasStream();
-    await playVideo();
     const video = ensureVideoElement();
-    await waitForMetadata(video, 1400);
+    if (!state.stream) {
+        throw new Error('Keeper video is not ready. Tap Start Video first, wait for "Running", then tap PiP.');
+    }
+
+    if (video.paused) {
+        throw new Error('Keeper video is not playing. Tap Start Video first, then tap PiP.');
+    }
+
+    if (video.readyState < 1) {
+        throw new Error('Keeper video is still preparing. Wait a second, then tap PiP again.');
+    }
 
     if (isInPictureInPicture()) {
         refreshRuntimeStatus();
@@ -538,11 +546,7 @@ async function startKeeper({ enterPip = true } = {}) {
         }
 
         if (enterPip) {
-            try {
-                await enterPictureInPicture();
-            } catch (error) {
-                setLastWarning(normalizeError(error));
-            }
+            setMessage('Video is running. On iOS, tap the PiP button once more to enter Picture in Picture.', 'info');
         }
 
         refreshRuntimeStatus();
@@ -756,13 +760,18 @@ function bindSettingsControls() {
             getSettings().enabled = true;
             saveSettings();
             syncUI();
-            await startKeeper({ enterPip: getSettings().enterPipOnStart });
+            await startKeeper({ enterPip: false });
         } else {
             await stopKeeper({ disarm: true });
         }
     });
 
     $('#ios_keeper_start').on('click', () => {
+        if (getSettings().enterPipOnStart && state.stream && state.video && !state.video.paused) {
+            void enterPictureInPicture().catch(setLastError);
+            return;
+        }
+
         void startKeeper({ enterPip: getSettings().enterPipOnStart });
     });
 

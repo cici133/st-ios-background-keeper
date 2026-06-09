@@ -5,16 +5,20 @@ import { registerSlashCommand } from '../../../slash-commands.js';
 
 const EXTENSION_NAME = getExtensionNameFromImportUrl();
 const SETTINGS_KEY = 'iosBackgroundKeeper';
+const PAUSE_POLICY_VERSION = 1;
+const USER_PAUSED_MESSAGE = 'Paused. Auto resume is suspended until you press Start Video again.';
+const PIP_CLOSED_MESSAGE = 'Picture in Picture closed. Auto resume is suspended until you press Start Video again.';
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: false,
     enterPipOnStart: true,
-    autoResume: true,
+    autoResume: false,
     wakeLock: false,
     showPreview: false,
     showDiagnostics: true,
     sourceMode: 'auto',
     frameRate: 1,
+    pausePolicyVersion: PAUSE_POLICY_VERSION,
 });
 
 const state = {
@@ -38,6 +42,7 @@ const state = {
     recordedMimeType: '',
     userPaused: false,
     suppressPauseTracking: false,
+    lastPresentationMode: '',
 };
 
 function getExtensionNameFromImportUrl() {
@@ -67,10 +72,18 @@ function getSettings() {
     }
 
     const settings = extension_settings[SETTINGS_KEY];
+    const previousPausePolicyVersion = Number(settings.pausePolicyVersion) || 0;
+
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
         if (!Object.hasOwn(settings, key)) {
             settings[key] = value;
         }
+    }
+
+    if (previousPausePolicyVersion < PAUSE_POLICY_VERSION) {
+        settings.autoResume = false;
+        settings.pausePolicyVersion = PAUSE_POLICY_VERSION;
+        saveSettingsDebounced();
     }
 
     settings.enabled = Boolean(settings.enabled);
@@ -81,6 +94,7 @@ function getSettings() {
     settings.showDiagnostics = Boolean(settings.showDiagnostics);
     settings.sourceMode = normalizeSourceMode(settings.sourceMode);
     settings.frameRate = clampFrameRate(settings.frameRate);
+    settings.pausePolicyVersion = PAUSE_POLICY_VERSION;
 
     return settings;
 }
@@ -248,6 +262,7 @@ function updateDiagnostics() {
         ['PiP active', formatBool(isInPictureInPicture())],
         ['Stream tracks', stream ? String(stream.getVideoTracks().length) : '0'],
         ['Video size', video?.videoWidth ? `${video.videoWidth}x${video.videoHeight}` : 'none'],
+        ['Auto resume', formatBool(getSettings().autoResume)],
         ['User paused', formatBool(state.userPaused)],
         ['Runtime', state.startedAt ? formatDuration(Date.now() - state.startedAt) : '0s'],
         ['Max timer drift', `${Math.round(state.maxHeartbeatDriftMs)}ms`],
@@ -359,25 +374,72 @@ function bindVideoEvents(video) {
 
     video.addEventListener('pause', () => {
         if (state.suppressPauseTracking || !getSettings().enabled) return;
-
-        state.userPaused = true;
-        state.lastWarning = '';
-        setMessage('Paused. Auto resume is suspended until you press Start Video again.', 'info');
-        refreshRuntimeStatus();
-        updateDiagnostics();
+        markUserPaused();
     });
 
     video.addEventListener('play', () => {
-        if (!state.suppressPauseTracking) {
-            state.userPaused = false;
+        if (!state.suppressPauseTracking && state.userPaused && getSettings().enabled) {
+            pauseVideoInternally(video);
+            setMessage(USER_PAUSED_MESSAGE, 'info');
         }
+
         updateDiagnostics();
+    });
+
+    video.addEventListener('ended', () => {
+        if (state.suppressPauseTracking || !getSettings().enabled) return;
+        markUserPaused('Keeper video ended. Press Start Video to run it again.');
+    });
+
+    video.addEventListener('enterpictureinpicture', () => {
+        state.lastPresentationMode = 'picture-in-picture';
+    });
+
+    video.addEventListener('leavepictureinpicture', () => {
+        handlePictureInPictureClosed(video);
+    });
+
+    video.addEventListener('webkitpresentationmodechanged', () => {
+        const previousMode = state.lastPresentationMode;
+        const currentMode = video.webkitPresentationMode || 'inline';
+        state.lastPresentationMode = currentMode;
+
+        if (previousMode === 'picture-in-picture' && currentMode !== 'picture-in-picture') {
+            handlePictureInPictureClosed(video);
+        }
     });
 
     video.addEventListener('error', () => {
         const detail = video.error ? `media error ${video.error.code}` : 'media error';
         setLastError(detail);
     });
+}
+
+function markUserPaused(message = USER_PAUSED_MESSAGE) {
+    if (!getSettings().enabled) return;
+
+    state.userPaused = true;
+    state.lastWarning = '';
+    setMessage(message, 'info');
+    setMediaSessionState('none');
+    refreshRuntimeStatus();
+    updateDiagnostics();
+}
+
+function pauseForUser(video = state.video, message = USER_PAUSED_MESSAGE) {
+    if (!getSettings().enabled) return;
+
+    state.userPaused = true;
+    if (video && !video.paused) {
+        video.pause();
+    }
+
+    markUserPaused(message);
+}
+
+function handlePictureInPictureClosed(video = state.video) {
+    if (state.suppressPauseTracking || !getSettings().enabled) return;
+    pauseForUser(video, PIP_CLOSED_MESSAGE);
 }
 
 function pauseVideoInternally(video = state.video) {
@@ -655,7 +717,7 @@ async function enterPictureInPicture() {
     syncUI();
 
     const video = ensureVideoElement();
-    if (!state.stream) {
+    if (!state.stream && !state.recordedUrl) {
         throw new Error('Keeper video is not ready. Tap Start Video first, wait for "Running", then tap PiP.');
     }
 
@@ -837,7 +899,13 @@ async function recoveryTick() {
     const settings = getSettings();
     if (!settings.enabled || !state.video) return;
 
-    if (settings.autoResume && state.video.paused && !state.userPaused) {
+    if (state.userPaused) {
+        if (!state.video.paused) {
+            pauseVideoInternally(state.video);
+        }
+
+        setMediaSessionState('none');
+    } else if (settings.autoResume && state.video.paused) {
         try {
             await playVideo();
         } catch (error) {
@@ -913,11 +981,15 @@ function setupMediaSession() {
         }
 
         navigator.mediaSession.setActionHandler?.('play', () => {
+            if (state.userPaused) {
+                setMediaSessionState('none');
+                return;
+            }
+
             void startKeeper({ enterPip: false });
         });
         navigator.mediaSession.setActionHandler?.('pause', () => {
-            state.video?.pause();
-            refreshRuntimeStatus();
+            pauseForUser(state.video);
         });
         setMediaSessionState('playing');
     } catch (error) {
@@ -963,15 +1035,15 @@ function refreshRuntimeStatus() {
     } else if (video && video.paused && settings.enabled && state.userPaused) {
         setBadge('Paused', 'warning');
         if (!state.lastWarning && !state.lastError) {
-            setMessage('Paused. Auto resume is suspended until you press Start Video again.', 'info');
+            setMessage(USER_PAUSED_MESSAGE, 'info');
         }
-        setMediaSessionState('paused');
+        setMediaSessionState('none');
     } else if (settings.enabled) {
         setBadge('Armed', 'warning');
         if (!state.lastWarning && !state.lastError) {
             setMessage('Armed. Press Start PiP to activate.', 'info');
         }
-        setMediaSessionState('paused');
+        setMediaSessionState('none');
     } else {
         setBadge('Stopped', 'stopped');
         if (!state.lastWarning && !state.lastError) {
@@ -1111,7 +1183,9 @@ function buildStatusSummary() {
     const report = getSupportReport();
     const status = isInPictureInPicture()
         ? 'PiP'
-        : state.video && !state.video.paused
+        : state.userPaused
+            ? 'paused'
+            : state.video && !state.video.paused
             ? 'running'
             : getSettings().enabled
                 ? 'armed'
@@ -1122,6 +1196,8 @@ function buildStatusSummary() {
         `homeScreen=${formatBool(report.homeScreen)}`,
         `canvasStream=${formatBool(report.canvasStream)}`,
         `webkitPip=${formatBool(report.webkitElementPip || report.webkitPipApi)}`,
+        `autoResume=${formatBool(getSettings().autoResume)}`,
+        `userPaused=${formatBool(state.userPaused)}`,
         `error=${state.lastError || 'none'}`,
     ].join(' ');
 }
